@@ -902,6 +902,8 @@ class ManifestLoader:
                     macro.depends_on.add_macro(dep_macro_id)  # will check for dupes
 
     def write_manifest_for_partial_parse(self):
+        if get_flags().USE_FUSION_PARSER:
+            return
         path = os.path.join(self.root_project.project_target_path, PARTIAL_PARSE_FILE_NAME)
         try:
             # This shouldn't be necessary, but we have gotten bug reports (#3757) of the
@@ -1025,6 +1027,8 @@ class ManifestLoader:
 
     def read_manifest_for_partial_parse(self) -> Optional[Manifest]:
         flags = get_flags()
+        if flags.USE_FUSION_PARSER:
+            return None
         if not flags.PARTIAL_PARSE:
             fire_event(PartialParsingNotEnabled())
             return None
@@ -2501,7 +2505,10 @@ def write_manifest(manifest: Manifest, target_path: str, which: Optional[str] = 
     manifest.write(path)
     add_artifact_produced(path)
 
-    write_semantic_manifest(manifest=manifest, target_path=target_path)
+    if not get_flags().USE_FUSION_PARSER:
+        # In fusion mode, fs writes a higher-fidelity semantic_manifest.json;
+        # don't clobber it with dbt-core's view.
+        write_semantic_manifest(manifest=manifest, target_path=target_path)
 
 
 def parse_manifest(
