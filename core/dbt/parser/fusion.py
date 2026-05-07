@@ -9,10 +9,14 @@ See docs/arch/fusion_parser_design.md for the full design and rollout plan.
 
 from __future__ import annotations
 
+import logging
 import shlex
 import subprocess
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, List
+
+logger = logging.getLogger(__name__)
 
 from dbt.artifacts.exceptions import IncompatibleSchemaError
 from dbt.artifacts.schemas.manifest import WritableManifest
@@ -43,23 +47,32 @@ def parse_with_fusion(flags: "Flags", runtime_config: "RuntimeConfig") -> Manife
     target_path = Path(runtime_config.project_target_path)
     manifest_path = target_path / "manifest.json"
 
-    _run_fusion(argv)
+    logger.info("fusion_parse_start argv=%s", argv)
+    start = time.perf_counter()
+    success = False
+    try:
+        _run_fusion(argv)
 
-    if not manifest_path.exists():
-        raise FusionParserError(
-            f"fs parse completed but {manifest_path} was not produced."
+        if not manifest_path.exists():
+            raise FusionParserError(
+                f"fs parse completed but {manifest_path} was not produced."
+            )
+
+        writable = _load_writable_manifest(manifest_path)
+        manifest = Manifest.from_writable_manifest(writable)
+        # build_flat_graph is normally called by ManifestLoader.get_full_manifest;
+        # the fusion path bypasses that loader, so populate flat_graph here to
+        # power the `graph` context variable (graph.nodes, graph.sources, ...).
+        manifest.build_flat_graph()
+
+        _delete_stale_partial_parse(target_path)
+        success = True
+        return manifest
+    finally:
+        elapsed = time.perf_counter() - start
+        logger.info(
+            "fusion_parse_end success=%s elapsed_seconds=%.3f", success, elapsed
         )
-
-    writable = _load_writable_manifest(manifest_path)
-    manifest = Manifest.from_writable_manifest(writable)
-    # build_flat_graph is normally called by ManifestLoader.get_full_manifest;
-    # the fusion path bypasses that loader, so populate flat_graph here to
-    # power the `graph` context variable (graph.nodes, graph.sources, ...).
-    manifest.build_flat_graph()
-
-    _delete_stale_partial_parse(target_path)
-
-    return manifest
 
 
 def _build_argv(flags: "Flags") -> List[str]:
@@ -111,14 +124,23 @@ def _run_fusion(argv: List[str]) -> None:
         result = subprocess.run(argv, capture_output=True, text=True, check=False)
     except FileNotFoundError as e:
         raise FusionParserMissingError(
-            f"Fusion parser command not found: {argv[0]!r}. "
-            f"Ensure 'fs' is installed and on PATH, or set --fusion-parser-command."
+            f"Fusion parser command not found: {argv[0]!r}.\n"
+            f"  Hint: install the fs binary and ensure it is on PATH, or set\n"
+            f"        --fusion-parser-command (or DBT_FUSION_PARSER_COMMAND)\n"
+            f"        to the absolute path of the binary.\n"
+            f"  Disable the fusion parser by removing --use-fusion-parser\n"
+            f"  (or unsetting DBT_USE_FUSION_PARSER) to fall back to dbt-core's parser."
         ) from e
 
     if result.returncode != 0:
         stderr = (result.stderr or "").strip() or "(no stderr)"
+        cmd = " ".join(shlex.quote(a) for a in argv)
         raise FusionParserError(
-            f"Fusion parser failed (exit {result.returncode}): {stderr}"
+            f"Fusion parser failed (exit {result.returncode}).\n"
+            f"  Command: {cmd}\n"
+            f"  Stderr:  {stderr}\n"
+            f"  Hint: re-run with --debug to see the full subprocess output, or\n"
+            f"        run the command directly outside of dbt to reproduce."
         )
 
 
@@ -127,12 +149,17 @@ def _load_writable_manifest(path: Path) -> WritableManifest:
         return WritableManifest.read_and_check_versions(str(path))
     except IncompatibleSchemaError as e:
         raise FusionParserVersionError(
-            f"Fusion-produced manifest at {path} has an incompatible schema "
-            f"version: expected {e.expected}, found {e.found}."
+            f"Fusion-produced manifest at {path} has an incompatible schema version.\n"
+            f"  Expected: {e.expected}\n"
+            f"  Found:    {e.found}\n"
+            f"  Hint: upgrade dbt-core or downgrade the fs binary so that both\n"
+            f"        agree on the manifest schema version."
         ) from e
     except Exception as e:
         raise FusionParserSchemaError(
-            f"Could not load fusion-produced manifest at {path}: {e}"
+            f"Could not load fusion-produced manifest at {path}: {e}\n"
+            f"  Hint: this usually indicates a corrupted or partially-written\n"
+            f"        manifest. Delete {path} and re-run."
         ) from e
 
 

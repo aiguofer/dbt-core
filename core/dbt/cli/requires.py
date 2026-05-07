@@ -414,9 +414,17 @@ def setup_manifest(ctx: Context, write: bool = True, write_perf_info: bool = Fal
 
     ctx.obj["catalogs"] = catalogs
 
+    use_fusion = getattr(flags, "USE_FUSION_PARSER", False)
+    if not use_fusion and getattr(flags, "REQUIRE_FUSION_PARSER", False) is True:
+        raise DbtProjectError(
+            "The 'require_fusion_parser' behavior flag is enabled, but --use-fusion-parser "
+            "(or DBT_USE_FUSION_PARSER) was not set. Enable the fusion parser or disable "
+            "the behavior flag in dbt_project.yml."
+        )
+
     # if a manifest has already been set on the context, don't overwrite it
     if ctx.obj.get("manifest") is None:
-        if getattr(flags, "USE_FUSION_PARSER", False):
+        if use_fusion:
             from dbt.parser.fusion import parse_with_fusion
             from dbt.parser.manifest import enrich_manifest_with_plugin_artifacts
 

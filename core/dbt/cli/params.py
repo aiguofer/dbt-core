@@ -309,9 +309,8 @@ full_refresh = _create_option_and_track_env_var(
 fusion_parser_command = _create_option_and_track_env_var(
     "--fusion-parser-command",
     envvar="DBT_FUSION_PARSER_COMMAND",
-    help="Command to invoke for the fusion parser when --use-fusion-parser is set. Defaults to 'fs parse'.",
+    help="Command used to invoke the fusion parser when --use-fusion-parser is set. Accepts a string that will be split with shlex; the project directory and other forwarded flags are appended at runtime. Defaults to 'fs parse'.",
     default="fs parse",
-    hidden=True,
 )
 
 host = _create_option_and_track_env_var(
@@ -799,9 +798,8 @@ use_fast_test_edges = _create_option_and_track_env_var(
 use_fusion_parser = _create_option_and_track_env_var(
     "--use-fusion-parser/--no-use-fusion-parser",
     envvar="DBT_USE_FUSION_PARSER",
-    help="Delegate parsing to the fusion parser (fs) instead of running dbt-core's own parser. Hidden in v1.",
+    help="Delegate parsing to the fusion parser (fs) instead of dbt-core's own parser. Requires the 'fs' binary on PATH (or set --fusion-parser-command). Partial parsing and plugin get_nodes hooks are not supported in this mode. See docs/arch/fusion_parser_design.md for the rollout plan and known fidelity gaps.",
     default=False,
-    hidden=True,
 )
 
 vars = _create_option_and_track_env_var(

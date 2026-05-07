@@ -1,7 +1,10 @@
 from types import SimpleNamespace
 from unittest import mock
 
+import pytest
+
 from dbt.cli import requires
+from dbt.exceptions import DbtProjectError
 
 
 def _ctx(flags, manifest=None):
@@ -19,9 +22,10 @@ def _ctx(flags, manifest=None):
     return SimpleNamespace(obj=obj)
 
 
-def _flags(use_fusion: bool = False):
+def _flags(use_fusion: bool = False, require_fusion: bool = False):
     return SimpleNamespace(
         USE_FUSION_PARSER=use_fusion,
+        REQUIRE_FUSION_PARSER=require_fusion,
         FUSION_PARSER_COMMAND="fs parse",
         PROJECT_DIR="/proj",
         VARS={},
@@ -68,6 +72,25 @@ class TestSetupManifestFusionBranch:
             parse_manifest.assert_called_once()
             parse_with_fusion.assert_not_called()
             patches["_wire_adapter_for_external_manifest"].assert_not_called()
+
+    def test_require_fusion_without_use_fusion_raises(self):
+        ctx = _ctx(_flags(use_fusion=False, require_fusion=True))
+        with self._common_patches() as patches:
+            patches["load_catalogs"].return_value = []
+            with pytest.raises(DbtProjectError, match="require_fusion_parser"):
+                requires.setup_manifest(ctx)
+
+    def test_require_fusion_with_use_fusion_proceeds(self):
+        ctx = _ctx(_flags(use_fusion=True, require_fusion=True))
+        with self._common_patches() as patches, mock.patch(
+            "dbt.parser.fusion.parse_with_fusion"
+        ) as parse_with_fusion:
+            patches["load_catalogs"].return_value = []
+            parse_with_fusion.return_value = SimpleNamespace()
+
+            requires.setup_manifest(ctx)
+
+            parse_with_fusion.assert_called_once()
 
     def test_pre_set_manifest_skips_both_parsers(self):
         existing = SimpleNamespace()

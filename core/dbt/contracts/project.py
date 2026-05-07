@@ -377,6 +377,7 @@ class ProjectFlags(ExtensibleDbtClassMixin):
     require_corrected_analysis_fqns: bool = False
     require_source_and_semantic_model_names_without_spaces: bool = False
     enable_grouped_warn_error_parser_logs: bool = False
+    require_fusion_parser: bool = False
 
     @property
     def project_only_flags(self) -> Dict[str, Any]:
@@ -402,6 +403,7 @@ class ProjectFlags(ExtensibleDbtClassMixin):
             "require_corrected_analysis_fqns": self.require_corrected_analysis_fqns,
             "require_source_and_semantic_model_names_without_spaces": self.require_source_and_semantic_model_names_without_spaces,
             "enable_grouped_warn_error_parser_logs": self.enable_grouped_warn_error_parser_logs,
+            "require_fusion_parser": self.require_fusion_parser,
         }
 
 
