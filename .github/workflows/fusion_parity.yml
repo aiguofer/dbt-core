@@ -1,0 +1,91 @@
+# **what?**
+# Gated parity job for the fusion parser integration. Parses a fixture
+# matrix with both core and fs, diffs the manifests against a documented
+# allowlist, and emits a parse-time benchmark.
+#
+# **why?**
+# Phase 2 of the fusion-parser rollout (see docs/arch/fusion_parser_design.md):
+# we need a CI signal that fs-produced manifests match core-produced ones
+# modulo expected drift, before flipping the public flag in Phase 3.
+#
+# **when?**
+# Manual dispatch only, until fs distribution stabilizes. Skip-if-fs-missing
+# keeps the parity tests inert when DBT_FS_BIN is unset.
+
+name: Fusion Parser Parity
+
+on:
+  workflow_dispatch:
+    inputs:
+      fs_binary_url:
+        description: "URL to a prebuilt fs binary (tar.gz). Leave blank to skip."
+        required: false
+        type: string
+
+permissions: read-all
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  parity:
+    name: parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HATCH_PYTHON: "3.11"
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6
+        with:
+          python-version: "3.11"
+
+      - name: Install hatch
+        run: python -m pip install hatch
+
+      - name: Install fs binary (optional)
+        if: ${{ inputs.fs_binary_url != '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -L "${{ inputs.fs_binary_url }}" -o /tmp/fs.tgz
+          tar -xzf /tmp/fs.tgz -C "$HOME/.local/bin"
+          chmod +x "$HOME/.local/bin/fs"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "DBT_FS_BIN=$HOME/.local/bin/fs" >> "$GITHUB_ENV"
+
+      - name: Unit tests for parity tooling
+        working-directory: core
+        run: hatch run unit-tests ../tests/unit/parity
+
+      - name: Functional parity tests (skipped if fs absent)
+        working-directory: core
+        run: hatch run unit-tests ../tests/functional/fusion_parser/parity
+
+      - name: Parse-time benchmark (fs-only when available)
+        if: ${{ env.DBT_FS_BIN != '' }}
+        run: |
+          mkdir -p artifacts
+          python -m tests.parity.benchmark \
+            --project-dir tests/functional/fusion_parser \
+            --runs 5 \
+            --fs-binary "$DBT_FS_BIN" \
+            --json artifacts/benchmark.json
+        continue-on-error: true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fusion-parity-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: ignore
