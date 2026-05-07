@@ -425,13 +425,24 @@ def setup_manifest(ctx: Context, write: bool = True, write_perf_info: bool = Fal
         )
         adapter = get_adapter(runtime_config)
     else:
-        register_adapter(runtime_config, get_mp_context())
-        adapter = get_adapter(runtime_config)
-        adapter.set_macro_context_generator(generate_runtime_macro_context)  # type: ignore[arg-type]
-        adapter.set_macro_resolver(ctx.obj["manifest"])
-        query_header_context = generate_query_header_context(adapter.config, ctx.obj["manifest"])  # type: ignore[attr-defined]
-        adapter.connections.set_query_header(query_header_context)
-        for integration in active_integrations:
-            adapter.add_catalog_integration(integration)
+        adapter = _wire_adapter_for_external_manifest(
+            runtime_config, ctx.obj["manifest"], active_integrations
+        )
 
     fire_deferred_events(event_group_type=EventGroupType.PARSE)
+
+
+def _wire_adapter_for_external_manifest(runtime_config, manifest, active_integrations):
+    """Register and configure the adapter for a manifest that was produced
+    outside of parse_manifest() — e.g. pre-set on the context, or (Phase 1)
+    loaded from the fusion parser.
+    """
+    register_adapter(runtime_config, get_mp_context())
+    adapter = get_adapter(runtime_config)
+    adapter.set_macro_context_generator(generate_runtime_macro_context)  # type: ignore[arg-type]
+    adapter.set_macro_resolver(manifest)
+    query_header_context = generate_query_header_context(adapter.config, manifest)  # type: ignore[attr-defined]
+    adapter.connections.set_query_header(query_header_context)
+    for integration in active_integrations:
+        adapter.add_catalog_integration(integration)
+    return adapter
