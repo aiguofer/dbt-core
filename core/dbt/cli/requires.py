@@ -418,8 +418,13 @@ def setup_manifest(ctx: Context, write: bool = True, write_perf_info: bool = Fal
     if ctx.obj.get("manifest") is None:
         if getattr(flags, "USE_FUSION_PARSER", False):
             from dbt.parser.fusion import parse_with_fusion
+            from dbt.parser.manifest import enrich_manifest_with_plugin_artifacts
 
             ctx.obj["manifest"] = parse_with_fusion(flags, runtime_config)
+            if write and ctx.obj["flags"].write_json:
+                enrich_manifest_with_plugin_artifacts(
+                    ctx.obj["manifest"], ctx.obj["project"].project_name
+                )
             adapter = _wire_adapter_for_external_manifest(
                 runtime_config, ctx.obj["manifest"], active_integrations
             )
