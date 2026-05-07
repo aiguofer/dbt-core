@@ -1,8 +1,8 @@
 """Fusion parser integration.
 
-Phase 0 skeleton — defines the public surface and argv translation, but does not
-yet invoke the subprocess. All entry points raise NotImplementedError so the
-flag can land safely without exposing a half-finished code path.
+Delegates parsing to an external `fs parse` subprocess that produces a
+manifest.json on disk. dbt-core then loads that manifest and converts it
+to a runtime Manifest, bypassing its own parser entirely.
 
 See docs/arch/fusion_parser_design.md for the full design and rollout plan.
 """
@@ -10,33 +10,56 @@ See docs/arch/fusion_parser_design.md for the full design and rollout plan.
 from __future__ import annotations
 
 import shlex
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, List
 
-from dbt.exceptions import FusionParserError
+from dbt.artifacts.exceptions import IncompatibleSchemaError
+from dbt.artifacts.schemas.manifest import WritableManifest
+from dbt.contracts.graph.manifest import Manifest
+from dbt.exceptions import (
+    FusionParserError,
+    FusionParserMissingError,
+    FusionParserSchemaError,
+    FusionParserVersionError,
+)
 
 if TYPE_CHECKING:
     from dbt.cli.flags import Flags
     from dbt.config import RuntimeConfig
-    from dbt.contracts.graph.manifest import Manifest
 
 
-def parse_with_fusion(flags: "Flags", runtime_config: "RuntimeConfig") -> "Manifest":
+def parse_with_fusion(flags: "Flags", runtime_config: "RuntimeConfig") -> Manifest:
     """Invoke fs parse, load the resulting manifest.json, return runtime Manifest.
 
-    Phase 0: not yet wired up. Raises NotImplementedError.
-
-    Phase 1 will:
-      1. Build argv from flags via _build_argv.
-      2. Run subprocess; surface stderr as structured events.
+    Steps:
+      1. Build argv from flags.
+      2. Run subprocess; raise typed errors on missing binary or non-zero exit.
       3. Load <target>/manifest.json via WritableManifest.read_and_check_versions.
       4. Convert to runtime Manifest via Manifest.from_writable_manifest.
-      5. Delete stale partial_parse.msgpack.
+      5. Delete stale partial_parse.msgpack so a later non-fusion run reparses.
     """
-    raise NotImplementedError(
-        "Fusion parser integration is not yet implemented. "
-        "Set --no-use-fusion-parser (default) to use dbt-core's own parser."
-    )
+    argv = _build_argv(flags)
+    target_path = Path(runtime_config.project_target_path)
+    manifest_path = target_path / "manifest.json"
+
+    _run_fusion(argv)
+
+    if not manifest_path.exists():
+        raise FusionParserError(
+            f"fs parse completed but {manifest_path} was not produced."
+        )
+
+    writable = _load_writable_manifest(manifest_path)
+    manifest = Manifest.from_writable_manifest(writable)
+    # build_flat_graph is normally called by ManifestLoader.get_full_manifest;
+    # the fusion path bypasses that loader, so populate flat_graph here to
+    # power the `graph` context variable (graph.nodes, graph.sources, ...).
+    manifest.build_flat_graph()
+
+    _delete_stale_partial_parse(target_path)
+
+    return manifest
 
 
 def _build_argv(flags: "Flags") -> List[str]:
@@ -48,8 +71,6 @@ def _build_argv(flags: "Flags") -> List[str]:
     Forwarded flags (must affect manifest output):
       --project-dir, --profiles-dir, --profile, --target,
       --target-path, --vars, --packages-install-path
-
-    Open question: does fs accept dbt-core's flag names verbatim? v1 assumes yes.
     """
     base = shlex.split(getattr(flags, "FUSION_PARSER_COMMAND", "fs parse"))
     forwarded: List[str] = []
@@ -85,6 +106,36 @@ def _build_argv(flags: "Flags") -> List[str]:
     return base + forwarded
 
 
+def _run_fusion(argv: List[str]) -> None:
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, check=False)
+    except FileNotFoundError as e:
+        raise FusionParserMissingError(
+            f"Fusion parser command not found: {argv[0]!r}. "
+            f"Ensure 'fs' is installed and on PATH, or set --fusion-parser-command."
+        ) from e
+
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip() or "(no stderr)"
+        raise FusionParserError(
+            f"Fusion parser failed (exit {result.returncode}): {stderr}"
+        )
+
+
+def _load_writable_manifest(path: Path) -> WritableManifest:
+    try:
+        return WritableManifest.read_and_check_versions(str(path))
+    except IncompatibleSchemaError as e:
+        raise FusionParserVersionError(
+            f"Fusion-produced manifest at {path} has an incompatible schema "
+            f"version: expected {e.expected}, found {e.found}."
+        ) from e
+    except Exception as e:
+        raise FusionParserSchemaError(
+            f"Could not load fusion-produced manifest at {path}: {e}"
+        ) from e
+
+
 def _serialize_vars(cli_vars) -> str:
     """Serialize the resolved --vars dict to a YAML string for fs.
 
@@ -100,12 +151,12 @@ def _serialize_vars(cli_vars) -> str:
 
 
 def _delete_stale_partial_parse(target_path: Path) -> None:
-    """Remove partial_parse.msgpack on first fusion run.
+    """Remove partial_parse.msgpack written by a prior non-fusion run.
 
-    The msgpack cache is owned by dbt-core's parser; in fusion mode it would
-    be both stale (no longer written) and potentially misleading (different
-    file_id mappings). Deleting it on entry to fusion mode is harmless if
-    absent and unambiguous if present.
+    The msgpack cache is owned by dbt-core's parser; in fusion mode it is no
+    longer written, and a later non-fusion run would load a cache whose
+    file_id mappings predate any fusion-era source changes. Deleting on
+    fusion entry is harmless if absent and unambiguous if present.
     """
     msgpack = target_path / "partial_parse.msgpack"
     if msgpack.exists():
