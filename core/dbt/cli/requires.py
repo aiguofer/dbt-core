@@ -416,14 +416,22 @@ def setup_manifest(ctx: Context, write: bool = True, write_perf_info: bool = Fal
 
     # if a manifest has already been set on the context, don't overwrite it
     if ctx.obj.get("manifest") is None:
-        ctx.obj["manifest"] = parse_manifest(
-            runtime_config,
-            write_perf_info,
-            write,
-            ctx.obj["flags"].write_json,
-            active_integrations,
-        )
-        adapter = get_adapter(runtime_config)
+        if getattr(flags, "USE_FUSION_PARSER", False):
+            from dbt.parser.fusion import parse_with_fusion
+
+            ctx.obj["manifest"] = parse_with_fusion(flags, runtime_config)
+            adapter = _wire_adapter_for_external_manifest(
+                runtime_config, ctx.obj["manifest"], active_integrations
+            )
+        else:
+            ctx.obj["manifest"] = parse_manifest(
+                runtime_config,
+                write_perf_info,
+                write,
+                ctx.obj["flags"].write_json,
+                active_integrations,
+            )
+            adapter = get_adapter(runtime_config)
     else:
         adapter = _wire_adapter_for_external_manifest(
             runtime_config, ctx.obj["manifest"], active_integrations
