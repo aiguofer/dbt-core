@@ -468,6 +468,8 @@ def test_project_flag_defaults():
         "use_colors",
         "use_colors_file",
         "use_experimental_parser",
+        "use_fusion_parser",
+        "fusion_parser_command",
         "version_check",
         "warn_error",
         "warn_error_options",
@@ -475,3 +477,58 @@ def test_project_flag_defaults():
     ]
     for flag in project_flags:
         assert getattr(flags, flag) is None
+
+
+class TestFusionParserFlags:
+    def make_dbt_context(
+        self, context_name: str, args: List[str], parent: Optional[click.Context] = None
+    ) -> click.Context:
+        return cli.make_context(context_name, args.copy(), parent)
+
+    def test_default_off(self):
+        ctx = self.make_dbt_context("run", ["run"])
+        flags = Flags(ctx)
+        assert flags.USE_FUSION_PARSER is False
+        assert flags.FUSION_PARSER_COMMAND == "fs parse"
+
+    def test_cli_arg_enables(self):
+        ctx = self.make_dbt_context("run", ["--use-fusion-parser", "run"])
+        flags = Flags(ctx)
+        assert flags.USE_FUSION_PARSER is True
+
+    def test_cli_arg_command(self):
+        ctx = self.make_dbt_context(
+            "run", ["--fusion-parser-command", "/opt/fs/bin/fs parse", "run"]
+        )
+        flags = Flags(ctx)
+        assert flags.FUSION_PARSER_COMMAND == "/opt/fs/bin/fs parse"
+
+    def test_env_var_enables(self, monkeypatch):
+        monkeypatch.setenv("DBT_USE_FUSION_PARSER", "True")
+        ctx = self.make_dbt_context("run", ["run"])
+        flags = Flags(ctx)
+        assert flags.USE_FUSION_PARSER is True
+
+    def test_env_var_command(self, monkeypatch):
+        monkeypatch.setenv("DBT_FUSION_PARSER_COMMAND", "fs parse --foo")
+        ctx = self.make_dbt_context("run", ["run"])
+        flags = Flags(ctx)
+        assert flags.FUSION_PARSER_COMMAND == "fs parse --foo"
+
+    def test_project_flags_set_use_fusion_parser(self):
+        project_flags = ProjectFlags(use_fusion_parser=True)
+        ctx = self.make_dbt_context("run", ["run"])
+        flags = Flags(ctx, project_flags)
+        assert flags.USE_FUSION_PARSER is True
+
+    def test_project_flags_set_command(self):
+        project_flags = ProjectFlags(fusion_parser_command="fs parse --strict")
+        ctx = self.make_dbt_context("run", ["run"])
+        flags = Flags(ctx, project_flags)
+        assert flags.FUSION_PARSER_COMMAND == "fs parse --strict"
+
+    def test_cli_overrides_project_flags(self):
+        project_flags = ProjectFlags(use_fusion_parser=True)
+        ctx = self.make_dbt_context("run", ["--no-use-fusion-parser", "run"])
+        flags = Flags(ctx, project_flags)
+        assert flags.USE_FUSION_PARSER is False

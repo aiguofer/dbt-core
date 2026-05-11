@@ -1,0 +1,32 @@
+{
+  "_doc": [
+    "Documented drift between fs-produced manifest.json and core-produced manifest.json.",
+    "Each entry should reference the fs-side blocker that explains it (F1-F13 in",
+    "docs/arch/fusion_parser_status.md). Entries are pruned as fs closes blockers.",
+    "Allowlist matches a path or any of its dotted descendants.",
+    "Schema:",
+    "  {<collection>: {fields_only_in_fs|fields_only_in_core|type_mismatches|value_mismatches: [<path>...]}}"
+  ],
+  "nodes": {
+    "fields_only_in_fs": [
+      "unrendered_config"
+    ],
+    "fields_only_in_core": [
+      "_event_status"
+    ],
+    "value_mismatches": [
+      "config.meta",
+      "fqn"
+    ]
+  },
+  "sources": {
+    "fields_only_in_fs": [
+      "unrendered_config"
+    ]
+  },
+  "macros": {
+    "value_mismatches": [
+      "supported_languages"
+    ]
+  }
+}

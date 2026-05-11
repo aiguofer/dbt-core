@@ -414,24 +414,56 @@ def setup_manifest(ctx: Context, write: bool = True, write_perf_info: bool = Fal
 
     ctx.obj["catalogs"] = catalogs
 
+    use_fusion = getattr(flags, "USE_FUSION_PARSER", False)
+    if not use_fusion and getattr(flags, "REQUIRE_FUSION_PARSER", False) is True:
+        raise DbtProjectError(
+            "The 'require_fusion_parser' behavior flag is enabled, but --use-fusion-parser "
+            "(or DBT_USE_FUSION_PARSER) was not set. Enable the fusion parser or disable "
+            "the behavior flag in dbt_project.yml."
+        )
+
     # if a manifest has already been set on the context, don't overwrite it
     if ctx.obj.get("manifest") is None:
-        ctx.obj["manifest"] = parse_manifest(
-            runtime_config,
-            write_perf_info,
-            write,
-            ctx.obj["flags"].write_json,
-            active_integrations,
-        )
-        adapter = get_adapter(runtime_config)
+        if use_fusion:
+            from dbt.parser.fusion import parse_with_fusion
+            from dbt.parser.manifest import enrich_manifest_with_plugin_artifacts
+
+            ctx.obj["manifest"] = parse_with_fusion(flags, runtime_config)
+            if write and ctx.obj["flags"].write_json:
+                enrich_manifest_with_plugin_artifacts(
+                    ctx.obj["manifest"], ctx.obj["project"].project_name
+                )
+            adapter = _wire_adapter_for_external_manifest(
+                runtime_config, ctx.obj["manifest"], active_integrations
+            )
+        else:
+            ctx.obj["manifest"] = parse_manifest(
+                runtime_config,
+                write_perf_info,
+                write,
+                ctx.obj["flags"].write_json,
+                active_integrations,
+            )
+            adapter = get_adapter(runtime_config)
     else:
-        register_adapter(runtime_config, get_mp_context())
-        adapter = get_adapter(runtime_config)
-        adapter.set_macro_context_generator(generate_runtime_macro_context)  # type: ignore[arg-type]
-        adapter.set_macro_resolver(ctx.obj["manifest"])
-        query_header_context = generate_query_header_context(adapter.config, ctx.obj["manifest"])  # type: ignore[attr-defined]
-        adapter.connections.set_query_header(query_header_context)
-        for integration in active_integrations:
-            adapter.add_catalog_integration(integration)
+        adapter = _wire_adapter_for_external_manifest(
+            runtime_config, ctx.obj["manifest"], active_integrations
+        )
 
     fire_deferred_events(event_group_type=EventGroupType.PARSE)
+
+
+def _wire_adapter_for_external_manifest(runtime_config, manifest, active_integrations):
+    """Register and configure the adapter for a manifest that was produced
+    outside of parse_manifest() — e.g. pre-set on the context, or (Phase 1)
+    loaded from the fusion parser.
+    """
+    register_adapter(runtime_config, get_mp_context())
+    adapter = get_adapter(runtime_config)
+    adapter.set_macro_context_generator(generate_runtime_macro_context)  # type: ignore[arg-type]
+    adapter.set_macro_resolver(manifest)
+    query_header_context = generate_query_header_context(adapter.config, manifest)  # type: ignore[attr-defined]
+    adapter.connections.set_query_header(query_header_context)
+    for integration in active_integrations:
+        adapter.add_catalog_integration(integration)
+    return adapter

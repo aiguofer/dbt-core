@@ -145,6 +145,8 @@ def global_flags(func):
     @p.use_colors
     @p.use_colors_file
     @p.use_experimental_parser
+    @p.use_fusion_parser
+    @p.fusion_parser_command
     @p.version
     @p.version_check
     @p.warn_error

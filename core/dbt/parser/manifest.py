@@ -99,6 +99,7 @@ from dbt.exceptions import (
     InvalidAccessTypeError,
     ParsingError,
     TargetNotFoundError,
+    dbtPluginError,
     scrub_secrets,
 )
 from dbt.flags import get_flags
@@ -902,6 +903,8 @@ class ManifestLoader:
                     macro.depends_on.add_macro(dep_macro_id)  # will check for dupes
 
     def write_manifest_for_partial_parse(self):
+        if get_flags().USE_FUSION_PARSER:
+            return
         path = os.path.join(self.root_project.project_target_path, PARTIAL_PARSE_FILE_NAME)
         try:
             # This shouldn't be necessary, but we have gotten bug reports (#3757) of the
@@ -1025,6 +1028,8 @@ class ManifestLoader:
 
     def read_manifest_for_partial_parse(self) -> Optional[Manifest]:
         flags = get_flags()
+        if flags.USE_FUSION_PARSER:
+            return None
         if not flags.PARTIAL_PARSE:
             fire_event(PartialParsingNotEnabled())
             return None
@@ -2489,6 +2494,33 @@ def process_node(config: RuntimeConfig, manifest: Manifest, node: ManifestNode):
     _process_docs_for_node(ctx, node, manifest)
 
 
+def enrich_manifest_with_plugin_artifacts(manifest: Manifest, project_name: str) -> None:
+    """Run the read-only plugin enrichment hook against an externally-produced
+    manifest (e.g. from the fusion parser) and write the resulting artifacts.
+
+    Mirrors the plugin handling in parse_manifest's tail. Fails fast if any
+    registered plugin advertises get_nodes — mid-parse node injection is
+    unsupported in fusion v1 because the parse already happened in fs.
+    """
+    pm = plugins.get_plugin_manager(project_name)
+    get_nodes_hooks = pm.hooks.get("get_nodes", [])
+    if get_nodes_hooks:
+        names = sorted({h.__self__.name for h in get_nodes_hooks})  # type: ignore[attr-defined]
+        raise dbtPluginError(
+            f"Plugin(s) {names} register a get_nodes hook, which is not "
+            f"supported in fusion parser mode."
+        )
+
+    plugin_artifacts = pm.get_manifest_artifacts(manifest)
+    for path, plugin_artifact in plugin_artifacts.items():
+        plugin_artifact.write(path)
+        fire_event(
+            ArtifactWritten(
+                artifact_type=plugin_artifact.__class__.__name__, artifact_path=path
+            )
+        )
+
+
 def write_semantic_manifest(manifest: Manifest, target_path: str) -> None:
     path = os.path.join(target_path, SEMANTIC_MANIFEST_FILE_NAME)
     semantic_manifest = SemanticManifest(manifest)
@@ -2501,7 +2533,10 @@ def write_manifest(manifest: Manifest, target_path: str, which: Optional[str] = 
     manifest.write(path)
     add_artifact_produced(path)
 
-    write_semantic_manifest(manifest=manifest, target_path=target_path)
+    if not get_flags().USE_FUSION_PARSER:
+        # In fusion mode, fs writes a higher-fidelity semantic_manifest.json;
+        # don't clobber it with dbt-core's view.
+        write_semantic_manifest(manifest=manifest, target_path=target_path)
 
 
 def parse_manifest(
